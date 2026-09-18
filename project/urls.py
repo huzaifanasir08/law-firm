@@ -14,6 +14,18 @@ urlpatterns = [
     # Accounts / Auth
     path("api/accounts/", include("apps.accounts.urls")),
 
+    # Admin Management & Stats
+    path("api/admin/", include("apps.administration.urls")),
+
+    # Firm Management & Stats
+    path("api/firm/", include("apps.firm.urls")),
+
+    # Lawyer Management, Clients, Matters & Stats
+    path("api/lawyer/", include("apps.lawyer.urls")),
+
+    # Matters Management & Stats
+    path("api/matters/", include("apps.matters.urls")),
+
     # OpenAPI schema & docs
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),

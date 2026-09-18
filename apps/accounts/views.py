@@ -21,19 +21,23 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView as BaseTokenRefreshView
 
-from .emails import send_password_reset_email
-from .models import PasswordResetToken, User
+from .emails import send_2fa_status_change_email, send_otp_email, send_password_reset_email
+from .models import OTPPurpose, PasswordResetToken, User
 from .serializers import (
     ChangePasswordSerializer,
     ForgotPasswordSerializer,
     LoginSerializer,
     LogoutSerializer,
+    OTPSendSerializer,
+    OTPVerifySerializer,
     ProfilePhotoSerializer,
     ResetPasswordSerializer,
+    TwoFAConfirmChangeSerializer,
+    TwoFARequestChangeSerializer,
     UserProfileMiniSerializer,
     UserProfileSerializer,
 )
-from .tokens import generate_password_reset_token, verify_password_reset_token
+from .tokens import can_resend_otp, generate_otp, generate_password_reset_token, verify_otp, verify_password_reset_token
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,10 @@ class LoginThrottle(AnonRateThrottle):
 
 class ForgotPasswordThrottle(AnonRateThrottle):
     scope = "forgot_password"
+
+
+class OTPThrottle(AnonRateThrottle):
+    scope = "otp"
 
 
 # ─── Login ────────────────────────────────────────────────────────────────────
@@ -87,8 +95,20 @@ class LoginView(APIView):
         user: User = validated["user"]
         user_data = UserProfileMiniSerializer(user, context={"request": request}).data
 
+        if validated.get("requires_2fa"):
+            return Response(
+                {
+                    "requires_2fa": True,
+                    "otp_session_token": validated["otp_session_token"],
+                    "message": validated["message"],
+                    "user": user_data,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         return Response(
             {
+                "requires_2fa": False,
                 "access": validated["access"],
                 "refresh": validated["refresh"],
                 "user": user_data,
@@ -137,7 +157,7 @@ class LogoutView(APIView):
             token.blacklist()
         except TokenError as exc:
             return Response(
-                {"errors": {"refresh": [str(exc)]}},
+                {"error": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -295,7 +315,7 @@ class ResetPasswordView(APIView):
         token_instance = verify_password_reset_token(raw_token)
         if token_instance is None:
             return Response(
-                {"errors": {"token": ["Invalid, expired, or already-used reset token."]}},
+                {"error": "Invalid, expired, or already-used reset token."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -359,6 +379,207 @@ class ProfilePhotoView(APIView):
 
         profile = UserProfileSerializer(user, context={"request": request})
         return Response(profile.data, status=status.HTTP_200_OK)
+
+
+# ─── OTP & 2FA Views ──────────────────────────────────────────────────────────
+
+
+@extend_schema(tags=["Two-Factor Authentication"])
+class OTPSendView(APIView):
+    """Send an OTP code for login or verification."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [OTPThrottle]
+
+    @extend_schema(
+        summary="Send OTP",
+        description="Send an OTP to the user's registered email using their session token or email address.",
+        request=OTPSendSerializer,
+        responses={
+            200: OpenApiResponse(description="OTP sent"),
+            429: OpenApiResponse(description="Rate limited / cooldown active"),
+        },
+    )
+    def post(self, request):
+        serializer = OTPSendSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        user = serializer.validated_data.get("user")
+        if not user:
+            return Response(
+                {"message": "If an account matches the provided information, a verification code has been sent."},
+                status=status.HTTP_200_OK,
+            )
+
+        can_resend, remaining = can_resend_otp(user, purpose=OTPPurpose.LOGIN)
+        if not can_resend:
+            return Response(
+                {"error": f"Please wait {remaining} seconds before requesting a new OTP."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        raw_code, _ = generate_otp(user, purpose=OTPPurpose.LOGIN)
+        send_otp_email(user, raw_code, purpose=OTPPurpose.LOGIN)
+
+        return Response({"message": "OTP has been sent to your email."}, status=status.HTTP_200_OK)
+
+
+@extend_schema(tags=["Two-Factor Authentication"])
+class OTPResendView(APIView):
+    """Resend an OTP code with cooldown check."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [OTPThrottle]
+
+    @extend_schema(
+        summary="Resend OTP",
+        description="Invalidates previous OTP and sends a new one to the user's email if cooldown period has elapsed.",
+        request=OTPSendSerializer,
+        responses={
+            200: OpenApiResponse(description="New OTP sent"),
+            429: OpenApiResponse(description="Rate limited / cooldown active"),
+        },
+    )
+    def post(self, request):
+        serializer = OTPSendSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        user = serializer.validated_data.get("user")
+        if not user:
+            return Response(
+                {"message": "If an account matches the provided information, a verification code has been sent."},
+                status=status.HTTP_200_OK,
+            )
+
+        can_resend, remaining = can_resend_otp(user, purpose=OTPPurpose.LOGIN)
+        if not can_resend:
+            return Response(
+                {"error": f"Please wait {remaining} seconds before resending OTP."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        raw_code, _ = generate_otp(user, purpose=OTPPurpose.LOGIN)
+        send_otp_email(user, raw_code, purpose=OTPPurpose.LOGIN)
+
+        return Response({"message": "A new OTP code has been sent to your email."}, status=status.HTTP_200_OK)
+
+
+@extend_schema(tags=["Two-Factor Authentication"])
+class OTPVerifyView(APIView):
+    """Verify an OTP and complete the 2FA login flow."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [OTPThrottle]
+
+    @extend_schema(
+        summary="Verify OTP",
+        description="Verify a 6-digit OTP code to complete login authentication and receive JWT tokens.",
+        request=OTPVerifySerializer,
+        responses={
+            200: OpenApiResponse(description="Authentication successful"),
+            400: OpenApiResponse(description="Invalid, expired, or exceeded attempts"),
+        },
+    )
+    def post(self, request):
+        serializer = OTPVerifySerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        user = serializer.validated_data["user"]
+        code = serializer.validated_data["code"]
+
+        success, message, _ = verify_otp(user, OTPPurpose.LOGIN, code)
+        if not success:
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        refresh = RefreshToken.for_user(user)
+        user_data = UserProfileMiniSerializer(user, context={"request": request}).data
+
+        return Response(
+            {
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
+                "user": user_data,
+                "message": "Authentication successful.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(tags=["Two-Factor Authentication"])
+class TwoFARequestChangeView(APIView):
+    """Initiate enabling or disabling 2FA by sending an OTP to the user's email."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [OTPThrottle]
+
+    @extend_schema(
+        summary="Request 2FA setting change",
+        description="Generates and sends an OTP to the authenticated user's email to authorize enabling or disabling 2FA.",
+        request=TwoFARequestChangeSerializer,
+        responses={
+            200: OpenApiResponse(description="Verification code sent"),
+            429: OpenApiResponse(description="Cooldown active"),
+        },
+    )
+    def post(self, request):
+        user = request.user
+        can_resend, remaining = can_resend_otp(user, purpose=OTPPurpose.CHANGE_2FA)
+        if not can_resend:
+            return Response(
+                {"error": f"Please wait {remaining} seconds before requesting a new verification code."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        raw_code, _ = generate_otp(user, purpose=OTPPurpose.CHANGE_2FA)
+        send_otp_email(user, raw_code, purpose=OTPPurpose.CHANGE_2FA)
+
+        return Response(
+            {"message": "A verification code has been sent to your email to confirm 2FA change."},
+            status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(tags=["Two-Factor Authentication"])
+class TwoFAConfirmChangeView(APIView):
+    """Confirm and apply 2FA enable/disable setting using the verified OTP."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [OTPThrottle]
+
+    @extend_schema(
+        summary="Confirm 2FA setting change",
+        description="Verify the OTP code and update the user's two_factor_enabled setting.",
+        request=TwoFAConfirmChangeSerializer,
+        responses={
+            200: OpenApiResponse(description="2FA setting updated successfully"),
+            400: OpenApiResponse(description="Invalid or expired OTP"),
+        },
+    )
+    def post(self, request):
+        serializer = TwoFAConfirmChangeSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        code = serializer.validated_data["code"]
+        enable = serializer.validated_data["enable"]
+
+        success, message, _ = verify_otp(user, OTPPurpose.CHANGE_2FA, code)
+        if not success:
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.two_factor_enabled = enable
+        user.save(update_fields=["two_factor_enabled"])
+
+        send_2fa_status_change_email(user, enable)
+
+        status_text = "enabled" if enable else "disabled"
+        return Response(
+            {
+                "message": f"Two-factor authentication has been successfully {status_text}.",
+                "two_factor_enabled": enable,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

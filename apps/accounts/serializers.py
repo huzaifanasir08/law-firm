@@ -35,6 +35,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "role",
             "profile_photo",
             "is_active",
+            "two_factor_enabled",
             "created_at",
             "updated_at",
             "last_login",
@@ -57,7 +58,7 @@ class UserProfileMiniSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "name", "email", "phone", "address", "role", "profile_photo"]
+        fields = ["id", "name", "email", "phone", "address", "role", "profile_photo", "two_factor_enabled"]
         read_only_fields = fields
 
     def get_profile_photo(self, obj: User) -> str | None:
@@ -100,8 +101,25 @@ class LoginSerializer(serializers.Serializer):
                 code="account_inactive",
             )
 
+        if user.two_factor_enabled:
+            from .emails import send_otp_email
+            from .models import OTPPurpose
+            from .tokens import OTPSessionToken, generate_otp
+
+            raw_code, otp_record = generate_otp(user, purpose=OTPPurpose.LOGIN)
+            send_otp_email(user, raw_code, purpose=OTPPurpose.LOGIN)
+            session_token = str(OTPSessionToken.for_user(user))
+
+            return {
+                "requires_2fa": True,
+                "otp_session_token": session_token,
+                "message": "Two-factor authentication required. An OTP has been sent to your email.",
+                "user": user,
+            }
+
         refresh = RefreshToken.for_user(user)
         return {
+            "requires_2fa": False,
             "access": str(refresh.access_token),
             "refresh": str(refresh),
             "user": user,
@@ -227,3 +245,135 @@ class ProfilePhotoSerializer(serializers.ModelSerializer):
             )
 
         return value
+
+
+# ─── OTP & 2FA ────────────────────────────────────────────────────────────────
+
+
+class OTPSendSerializer(serializers.Serializer):
+    """Serializer for requesting or resending an OTP code."""
+
+    otp_session_token = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Session token from 2FA login response.",
+    )
+    email = serializers.EmailField(
+        required=False,
+        help_text="User email address.",
+    )
+
+    def validate(self, attrs: dict) -> dict:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and user.is_authenticated:
+            attrs["user"] = user
+            return attrs
+
+        session_token = attrs.get("otp_session_token")
+        email = attrs.get("email")
+
+        if session_token:
+            try:
+                from .tokens import OTPSessionToken
+                token = OTPSessionToken(session_token)
+                user_id = token.get("user_id")
+                user = User.objects.get(id=user_id, is_active=True)
+                attrs["user"] = user
+                return attrs
+            except Exception:
+                raise serializers.ValidationError(
+                    {"otp_session_token": [_("Invalid or expired session token.")]}
+                )
+
+        if email:
+            try:
+                user = User.objects.get(email=email.lower().strip(), is_active=True)
+                attrs["user"] = user
+                return attrs
+            except User.DoesNotExist:
+                # Do not leak email existence; return generic None user
+                attrs["user"] = None
+                return attrs
+
+        raise serializers.ValidationError(
+            {"non_field_errors": [_("Either otp_session_token or email is required.")]}
+        )
+
+
+class OTPVerifySerializer(serializers.Serializer):
+    """Serializer for verifying an OTP and completing authentication."""
+
+    code = serializers.CharField(
+        max_length=10,
+        help_text="6-digit verification code.",
+    )
+    otp_session_token = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Session token from 2FA login response.",
+    )
+    email = serializers.EmailField(
+        required=False,
+        help_text="User email address.",
+    )
+
+    def validate(self, attrs: dict) -> dict:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and user.is_authenticated:
+            attrs["user"] = user
+            return attrs
+
+        session_token = attrs.get("otp_session_token")
+        email = attrs.get("email")
+
+        if session_token:
+            try:
+                from .tokens import OTPSessionToken
+                token = OTPSessionToken(session_token)
+                user_id = token.get("user_id")
+                user = User.objects.get(id=user_id, is_active=True)
+                attrs["user"] = user
+                return attrs
+            except Exception:
+                raise serializers.ValidationError(
+                    {"otp_session_token": [_("Invalid or expired session token.")]}
+                )
+
+        if email:
+            try:
+                user = User.objects.get(email=email.lower().strip(), is_active=True)
+                attrs["user"] = user
+                return attrs
+            except User.DoesNotExist:
+                raise serializers.ValidationError(
+                    {"non_field_errors": [_("Invalid credentials or OTP.")]}
+                )
+
+        raise serializers.ValidationError(
+            {"non_field_errors": [_("Either otp_session_token or email is required.")]}
+        )
+
+
+class TwoFARequestChangeSerializer(serializers.Serializer):
+    """Serializer for requesting OTP to change 2FA setting."""
+
+    enable = serializers.BooleanField(
+        required=False,
+        default=True,
+        help_text="Target state for two-factor authentication.",
+    )
+
+
+class TwoFAConfirmChangeSerializer(serializers.Serializer):
+    """Serializer for confirming 2FA setting update with OTP code."""
+
+    code = serializers.CharField(
+        max_length=10,
+        help_text="6-digit verification code sent to user email.",
+    )
+    enable = serializers.BooleanField(
+        help_text="Set to True to enable 2FA, False to disable 2FA.",
+    )
+

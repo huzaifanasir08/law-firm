@@ -56,7 +56,10 @@ INSTALLED_APPS = [
     "django_filters",
     # Local apps
     "apps.accounts",
+    "apps.firm",
+    "apps.lawyer",
     "apps.matters",
+    "apps.administration",
 ]
 
 MIDDLEWARE = [
@@ -170,6 +173,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ─── Django REST Framework ───────────────────────────────────────────────────
 
 REST_FRAMEWORK = {
+    "EXCEPTION_HANDLER": "apps.accounts.exceptions.custom_exception_handler",
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "apps.accounts.authentication.BlacklistAwareJWTAuthentication",
     ],
@@ -185,6 +189,7 @@ REST_FRAMEWORK = {
         "user": "1000/day",
         "login": "10/minute",
         "forgot_password": "5/minute",
+        "otp": "5/minute",
     },
 }
 
@@ -221,7 +226,22 @@ SPECTACULAR_SETTINGS = {
     "TAGS": [
         {"name": "Authentication", "description": "Login, logout, token refresh"},
         {"name": "User", "description": "User profile and password management"},
+        {"name": "Admin - Users", "description": "Administrative user management"},
+        {"name": "Admin - Statistics", "description": "Administrative metrics and platform statistics"},
+        {"name": "Two-Factor Authentication", "description": "2FA management and OTP verification"},
+        {"name": "Firm - Profile", "description": "Firm profile management"},
+        {"name": "Firm - Lawyers", "description": "Firm lawyer onboarding and deactivation"},
+        {"name": "Firm - Statistics", "description": "Firm overview statistics"},
+        {"name": "Lawyer - Clients", "description": "Lawyer client records management"},
+        {"name": "Lawyer - Matters", "description": "Lawyer legal matter management"},
+        {"name": "Lawyer - Statistics", "description": "Lawyer client and matter statistics"},
     ],
+    "SWAGGER_UI_SETTINGS": {
+        "persistAuthorization": True,
+        "displayRequestDuration": True,
+        "docExpansion": "list",
+        "filter": True,
+    },
 }
 
 
@@ -251,18 +271,23 @@ EMAIL_BACKEND = config(
     "EMAIL_BACKEND",
     default="django.core.mail.backends.console.EmailBackend",
 )
-EMAIL_HOST = config("EMAIL_HOST", default="localhost")
-EMAIL_PORT = config("EMAIL_PORT", default=25, cast=int)
-EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST = config("EMAIL_HOST", default="smtp.gmail.com")
+EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="huzaifanasirfab@gmail.com")
 EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
-EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=False, cast=bool)
-DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@lawfirm.com")
+EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="huzaifanasirfab@gmail.com")
 
 # Frontend URL used in password-reset links
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 
 # Password reset token expiry in seconds (default: 1 hour)
 PASSWORD_RESET_TIMEOUT = config("PASSWORD_RESET_TIMEOUT", default=3600, cast=int)
+
+# OTP & 2FA Configuration
+OTP_EXPIRY_SECONDS = config("OTP_EXPIRY_SECONDS", default=600, cast=int)
+OTP_MAX_ATTEMPTS = config("OTP_MAX_ATTEMPTS", default=5, cast=int)
+OTP_RESEND_COOLDOWN_SECONDS = config("OTP_RESEND_COOLDOWN_SECONDS", default=60, cast=int)
 
 
 # ─── Profile Photo Upload ─────────────────────────────────────────────────────

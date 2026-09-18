@@ -38,3 +38,19 @@ class BlacklistAwareJWTAuthentication(JWTAuthentication):
                 pass
 
         return validated
+
+
+from drf_spectacular.extensions import OpenApiAuthenticationExtension
+
+
+class BlacklistAwareJWTScheme(OpenApiAuthenticationExtension):
+    target_class = "apps.accounts.authentication.BlacklistAwareJWTAuthentication"
+    name = "jwtAuth"
+
+    def get_security_definition(self, auto_schema):
+        return {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+        }
+

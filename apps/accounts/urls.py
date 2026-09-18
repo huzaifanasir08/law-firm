@@ -12,9 +12,14 @@ from .views import (
     LoginView,
     LogoutView,
     MeView,
+    OTPSendView,
+    OTPResendView,
+    OTPVerifyView,
     ProfilePhotoView,
     ResetPasswordView,
     TokenRefreshView,
+    TwoFAConfirmChangeView,
+    TwoFARequestChangeView,
 )
 
 app_name = "accounts"
@@ -33,4 +38,11 @@ urlpatterns = [
     path("change-password/", ChangePasswordView.as_view(), name="change-password"),
     path("forgot-password/", ForgotPasswordView.as_view(), name="forgot-password"),
     path("reset-password/", ResetPasswordView.as_view(), name="reset-password"),
+
+    # ── OTP & Two-Factor Authentication ──────────────────────────────────────
+    path("otp/send/", OTPSendView.as_view(), name="otp-send"),
+    path("otp/resend/", OTPResendView.as_view(), name="otp-resend"),
+    path("otp/verify/", OTPVerifyView.as_view(), name="otp-verify"),
+    path("2fa/request-change/", TwoFARequestChangeView.as_view(), name="2fa-request-change"),
+    path("2fa/confirm-change/", TwoFAConfirmChangeView.as_view(), name="2fa-confirm-change"),
 ]

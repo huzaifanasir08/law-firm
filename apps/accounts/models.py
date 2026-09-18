@@ -13,6 +13,7 @@ class UserRole(models.TextChoices):
     FIRM_ADMIN = "FIRM_ADMIN", _("Firm Admin")
     LAWYER = "LAWYER", _("Lawyer")
     CLERK = "CLERK", _("Clerk")
+    CLIENT = "CLIENT", _("Client")
 
 
 class UserManager(BaseUserManager):
@@ -79,6 +80,16 @@ class User(AbstractBaseUser, PermissionsMixin):
         db_index=True,
     )
 
+    # ── Firm association ──────────────────────────────────────────────────────
+    firm = models.ForeignKey(
+        "firm.Firm",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="members",
+        verbose_name=_("firm"),
+    )
+
     # ── Profile photo ─────────────────────────────────────────────────────────
     profile_photo = models.ImageField(
         _("profile photo"),
@@ -100,6 +111,13 @@ class User(AbstractBaseUser, PermissionsMixin):
         _("staff status"),
         default=False,
         help_text=_("Designates whether the user can log into the admin site."),
+    )
+    two_factor_enabled = models.BooleanField(
+        _("two-factor authentication"),
+        default=False,
+        help_text=_(
+            "Designates whether two-factor authentication (OTP) is enabled for this user."
+        ),
     )
 
     # ── Timestamps ────────────────────────────────────────────────────────────
@@ -135,6 +153,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     @property
     def is_clerk(self) -> bool:
         return self.role == UserRole.CLERK
+
+    @property
+    def is_client(self) -> bool:
+        return self.role == UserRole.CLIENT
 
 
 class PasswordResetToken(models.Model):
@@ -176,3 +198,65 @@ class PasswordResetToken(models.Model):
     @property
     def is_valid(self) -> bool:
         return not self.used and not self.is_expired
+
+
+class OTPPurpose(models.TextChoices):
+    """Purposes for which a One-Time Password can be issued."""
+
+    LOGIN = "LOGIN", _("Login Verification")
+    CHANGE_2FA = "CHANGE_2FA", _("2FA Setting Change")
+
+
+class OTP(models.Model):
+    """
+    A single-use, time-limited One-Time Password.
+
+    The raw 6-digit code is never stored in plaintext — only its
+    HMAC-SHA256 hex digest is persisted, following the same security
+    pattern as PasswordResetToken.
+    """
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="otps",
+        verbose_name=_("user"),
+    )
+    purpose = models.CharField(
+        _("purpose"),
+        max_length=30,
+        choices=OTPPurpose.choices,
+        default=OTPPurpose.LOGIN,
+        db_index=True,
+    )
+    code_hash = models.CharField(
+        _("code hash"),
+        max_length=64,
+        db_index=True,
+        help_text=_("HMAC-SHA256 hex digest of the raw 6-digit code."),
+    )
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    expires_at = models.DateTimeField(_("expires at"))
+    used = models.BooleanField(_("used"), default=False)
+    attempts = models.PositiveSmallIntegerField(
+        _("verification attempts"),
+        default=0,
+        help_text=_("Number of failed verification attempts."),
+    )
+
+    class Meta:
+        verbose_name = _("OTP")
+        verbose_name_plural = _("OTPs")
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"OTP(user={self.user.email}, purpose={self.purpose}, used={self.used})"
+
+    @property
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
+
+    @property
+    def is_valid(self) -> bool:
+        return not self.used and not self.is_expired
+
