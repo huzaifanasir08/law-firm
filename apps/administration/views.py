@@ -21,6 +21,7 @@ from .filters import UserAdminFilter
 from .pagination import StandardResultsSetPagination
 from .serializers import (
     AdminCreateUserSerializer,
+    AdminFirmCreateSerializer,
     AdminStatsSerializer,
     AdminUserSerializer,
     AdminUserUpdateSerializer,
@@ -279,20 +280,22 @@ class AdminStatsView(APIView):
     post=extend_schema(
         tags=["Admin - Firms"],
         summary="Create a new firm",
-        description="Create a new firm entity specifying its type (INDIVIDUAL or MULTI) and profile details.",
-        request=FirmSerializer,
+        description=(
+            "Create a new firm entity specifying its type (INDIVIDUAL or MULTI) and profile details. "
+            "Automatically provisions an initial Firm Admin user and sends login credentials via SMTP."
+        ),
+        request=AdminFirmCreateSerializer,
         responses={
-            201: FirmSerializer,
+            201: AdminFirmCreateSerializer,
             400: OpenApiResponse(description="Validation error"),
             403: OpenApiResponse(description="Permission denied"),
         },
     ),
 )
 class AdminFirmListCreateView(generics.ListCreateAPIView):
-    """List all firms or create a new firm with type specification."""
+    """List all firms or create a new firm with type specification and initial Firm Admin."""
 
     permission_classes = [IsAuthenticated, IsAdminRole]
-    serializer_class = FirmSerializer
     pagination_class = StandardResultsSetPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "email", "phone", "registration_number"]
@@ -300,6 +303,11 @@ class AdminFirmListCreateView(generics.ListCreateAPIView):
     ordering_fields = ["created_at", "name", "type", "is_active"]
     ordering = ["-created_at"]
     queryset = Firm.objects.all()
+
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return AdminFirmCreateSerializer
+        return FirmSerializer
 
 
 @extend_schema_view(

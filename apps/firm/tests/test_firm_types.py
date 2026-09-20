@@ -3,9 +3,11 @@ Tests for Firm type (INDIVIDUAL vs MULTI) functionality and permissions.
 """
 
 import pytest
+from django.core import mail
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
+
 
 from apps.accounts.models import User, UserRole
 from apps.firm.models import Firm, FirmType
@@ -72,6 +74,58 @@ class TestFirmAdminCreationAndUpdate:
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data["type"] == "INDIVIDUAL"
         assert response.data["name"] == "Beacon Law Practice"
+        assert response.data["admin_user"] is not None
+        assert response.data["admin_user"]["email"] == "beacon@law.com"
+        assert response.data["admin_user"]["role"] == UserRole.FIRM_ADMIN
+
+        # Verify initial Firm Admin user was created in DB
+        created_admin = User.objects.get(email="beacon@law.com")
+        assert created_admin.role == UserRole.FIRM_ADMIN
+        assert created_admin.firm.name == "Beacon Law Practice"
+        assert created_admin.is_active is True
+        assert created_admin.has_usable_password()
+
+        # Verify welcome email was sent with credentials
+        assert len(mail.outbox) == 1
+        sent_email = mail.outbox[0]
+        assert sent_email.to == ["beacon@law.com"]
+        assert "Welcome to Beacon Law Practice" in sent_email.subject
+        assert "Temporary Password:" in sent_email.body
+
+    def test_super_admin_create_firm_with_custom_admin(self, super_admin):
+        client = get_auth_client(super_admin)
+        payload = {
+            "name": "Apex Custom Practice",
+            "type": "MULTI",
+            "email": "info@apexcustom.com",
+            "phone": "+1987654321",
+            "admin_name": "Harvey Managing Admin",
+            "admin_email": "harvey@apexcustom.com",
+        }
+        response = client.post("/api/admin/firms/", payload)
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data["admin_user"]["email"] == "harvey@apexcustom.com"
+        assert response.data["admin_user"]["name"] == "Harvey Managing Admin"
+
+        admin_user = User.objects.get(email="harvey@apexcustom.com")
+        assert admin_user.name == "Harvey Managing Admin"
+        assert admin_user.role == UserRole.FIRM_ADMIN
+
+        # Verify email sent to admin_email
+        assert len(mail.outbox) == 1
+        assert mail.outbox[0].to == ["harvey@apexcustom.com"]
+
+    def test_super_admin_create_firm_duplicate_admin_email_fails(self, super_admin, make_user):
+        make_user(email="existing@law.com")
+        client = get_auth_client(super_admin)
+        payload = {
+            "name": "Duplicate Practice",
+            "type": "INDIVIDUAL",
+            "email": "existing@law.com",
+        }
+        response = client.post("/api/admin/firms/", payload)
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "already exists" in str(response.data)
 
     def test_super_admin_update_firm_type(self, super_admin, individual_firm):
         client = get_auth_client(super_admin)

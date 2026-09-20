@@ -7,14 +7,16 @@ import secrets
 import string
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from apps.accounts.models import User, UserRole
 from apps.firm.models import Firm, FirmType
-from .emails import send_admin_user_welcome_email
+from .emails import send_admin_user_welcome_email, send_firm_admin_welcome_email
 
 logger = logging.getLogger(__name__)
+
 
 
 def generate_secure_password(length: int = 14) -> str:
@@ -240,3 +242,133 @@ class AdminStatsSerializer(serializers.Serializer):
     users_last_month = serializers.IntegerField(help_text="Users registered in previous month")
     total_firm_admins = serializers.IntegerField(help_text="Total Firm Admin users")
     total_lawyers = serializers.IntegerField(help_text="Total Lawyer users")
+
+
+class AdminFirmCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating a new firm along with its initial Firm Admin user.
+    A secure password is generated and emailed to the Firm Admin via SMTP.
+    """
+
+    admin_name = serializers.CharField(
+        required=False,
+        max_length=255,
+        write_only=True,
+        help_text="Name of the initial Firm Administrator. Defaults to '<Firm Name> Admin' if not provided.",
+    )
+    admin_email = serializers.EmailField(
+        required=False,
+        write_only=True,
+        help_text="Email of the initial Firm Administrator. Defaults to firm email if not provided.",
+    )
+    admin_phone = serializers.CharField(
+        required=False,
+        max_length=50,
+        write_only=True,
+        default="",
+        help_text="Contact phone of the initial Firm Administrator.",
+    )
+    admin_user = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = Firm
+        fields = [
+            "id",
+            "name",
+            "type",
+            "registration_number",
+            "email",
+            "phone",
+            "address",
+            "is_active",
+            "created_at",
+            "updated_at",
+            "admin_name",
+            "admin_email",
+            "admin_phone",
+            "admin_user",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at", "admin_user"]
+        extra_kwargs = {
+            "registration_number": {"required": False, "default": ""},
+            "phone": {"required": False, "default": ""},
+            "address": {"required": False, "default": ""},
+            "is_active": {"required": False, "default": True},
+        }
+
+    def validate_type(self, value: str) -> str:
+        if isinstance(value, str):
+            value = value.upper()
+        if value not in FirmType.values:
+            raise serializers.ValidationError(
+                _("Invalid firm type. Allowed types are: %(types)s") % {"types": ", ".join(FirmType.values)}
+            )
+        return value
+
+    def validate(self, attrs: dict) -> dict:
+        firm_email = attrs.get("email", "").strip().lower()
+        admin_email = attrs.get("admin_email", "").strip().lower()
+
+        target_admin_email = admin_email or firm_email
+        if not target_admin_email:
+            raise serializers.ValidationError(
+                {"email": _("Firm email or admin email is required.")}
+            )
+
+        if User.objects.filter(email__iexact=target_admin_email).exists():
+            field_name = "admin_email" if admin_email else "email"
+            raise serializers.ValidationError(
+                {field_name: _("A user with this email address already exists.")}
+            )
+
+        return attrs
+
+    def create(self, validated_data: dict) -> Firm:
+        admin_name = validated_data.pop("admin_name", "").strip()
+        admin_email = validated_data.pop("admin_email", "").strip().lower()
+        admin_phone = validated_data.pop("admin_phone", "").strip()
+
+        with transaction.atomic():
+            firm = Firm.objects.create(**validated_data)
+
+            effective_admin_email = admin_email or firm.email.lower()
+            effective_admin_name = admin_name or f"{firm.name} Admin"
+            effective_admin_phone = admin_phone or firm.phone
+
+            raw_password = generate_secure_password(14)
+
+            admin_user = User.objects.create_user(
+                email=effective_admin_email,
+                password=raw_password,
+                name=effective_admin_name,
+                phone=effective_admin_phone,
+                address=firm.address,
+                role=UserRole.FIRM_ADMIN,
+                firm=firm,
+                is_active=True,
+                is_staff=True,
+                is_superuser=False,
+            )
+
+            try:
+                send_firm_admin_welcome_email(admin_user, raw_password, firm.name)
+            except Exception:
+                logger.exception("Failed to send welcome email to firm admin %s", admin_user.email)
+
+            firm._initial_admin_user = admin_user
+
+        return firm
+
+    def get_admin_user(self, obj: Firm) -> dict | None:
+        admin_user = getattr(obj, "_initial_admin_user", None)
+        if not admin_user:
+            admin_user = User.objects.filter(firm=obj, role=UserRole.FIRM_ADMIN).order_by("created_at").first()
+        if admin_user:
+            return {
+                "id": admin_user.id,
+                "name": admin_user.name,
+                "email": admin_user.email,
+                "role": admin_user.role,
+            }
+        return None
+
