@@ -1,0 +1,3 @@
+"""
+Subscription application package.
+"""

@@ -60,6 +60,8 @@ INSTALLED_APPS = [
     "apps.lawyer",
     "apps.matters",
     "apps.administration",
+    "apps.leads",
+    "apps.subscription",
 ]
 
 MIDDLEWARE = [
@@ -235,6 +237,11 @@ SPECTACULAR_SETTINGS = {
         {"name": "Lawyer - Clients", "description": "Lawyer client records management"},
         {"name": "Lawyer - Matters", "description": "Lawyer legal matter management"},
         {"name": "Lawyer - Statistics", "description": "Lawyer client and matter statistics"},
+        {"name": "Leads", "description": "Public lead submission and prospective inquiries"},
+        {"name": "Admin - Leads", "description": "Administrative lead management, filtering, and editing"},
+        {"name": "Plans", "description": "Subscription plans management and public tiers"},
+        {"name": "Transactions", "description": "Financial and payment transaction auditing"},
+        {"name": "Subscriptions", "description": "Firm subscription memberships and composite onboarding"},
     ],
     "SWAGGER_UI_SETTINGS": {
         "persistAuthorization": True,

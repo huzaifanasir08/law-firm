@@ -26,6 +26,12 @@ urlpatterns = [
     # Matters Management & Stats
     path("api/matters/", include("apps.matters.urls")),
 
+    # Leads (Public submission)
+    path("api/leads/", include("apps.leads.urls")),
+
+    # Subscription
+    path("api/subscription/", include("apps.subscription.urls")),
+
     # OpenAPI schema & docs
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
