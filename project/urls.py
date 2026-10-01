@@ -23,6 +23,9 @@ urlpatterns = [
     # Lawyer Management, Clients, Matters & Stats
     path("api/lawyer/", include("apps.lawyer.urls")),
 
+    # Clerk Management & Tasks
+    path("api/clerk/", include("apps.clerk.urls")),
+
     # Matters Management & Stats
     path("api/matters/", include("apps.matters.urls")),
 

@@ -13,14 +13,22 @@ from rest_framework.views import APIView
 from apps.accounts.models import User, UserRole
 from apps.accounts.views import _revoke_all_refresh_tokens
 from apps.administration.pagination import StandardResultsSetPagination
-from .filters import FirmLawyerFilter
+from .filters import FirmClerkFilter, FirmLawyerFilter
 from .models import Firm
-from .permissions import CanManageFirmLawyers, IsFirmAdminOrSuperAdmin, get_user_firm
+from .permissions import (
+    CanManageFirmClerks,
+    CanManageFirmLawyers,
+    IsFirmAdminOrSuperAdmin,
+    get_user_firm,
+)
 from .serializers import (
+    FirmClerkSerializer,
+    FirmCreateClerkSerializer,
     FirmCreateLawyerSerializer,
     FirmLawyerSerializer,
     FirmSerializer,
     FirmStatsSerializer,
+    FirmUpdateClerkSerializer,
     FirmUpdateLawyerSerializer,
 )
 
@@ -318,3 +326,183 @@ class FirmStatsView(APIView):
 
         serializer = FirmStatsSerializer(data)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@extend_schema_view(
+    get=extend_schema(
+        tags=["Firm - Clerks"],
+        summary="List all clerks in firm",
+        description="List all clerks linked to the firm with pagination, search, and filtering.",
+        parameters=[
+            OpenApiParameter("page", int, description="Page number"),
+            OpenApiParameter("page_size", int, description="Number of results per page (max 100)"),
+            OpenApiParameter("search", str, description="Search across clerk name, email, and phone"),
+            OpenApiParameter("is_active", bool, description="Filter by active status"),
+            OpenApiParameter("created_after", str, description="Filter clerks created after datetime (ISO 8601)"),
+            OpenApiParameter("created_before", str, description="Filter clerks created before datetime (ISO 8601)"),
+        ],
+        responses={200: FirmClerkSerializer(many=True)},
+    ),
+    post=extend_schema(
+        tags=["Firm - Clerks"],
+        summary="Add a new clerk to the firm",
+        description=(
+            "Add a new clerk to the firm (for individual firm admin or superadmin). "
+            "A secure password is automatically generated and sent with login credentials to the clerk's email."
+        ),
+        request=FirmCreateClerkSerializer,
+        responses={
+            201: FirmClerkSerializer,
+            400: OpenApiResponse(description="Validation error"),
+            403: OpenApiResponse(description="Permission denied"),
+        },
+    ),
+)
+class FirmClerkListCreateView(generics.ListCreateAPIView):
+    """List and onboard clerks for the firm (INDIVIDUAL firm admin only)."""
+
+    permission_classes = [IsAuthenticated, CanManageFirmClerks]
+    pagination_class = StandardResultsSetPagination
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = FirmClerkFilter
+    search_fields = ["name", "email", "phone"]
+    ordering_fields = ["created_at", "name", "email", "is_active", "last_login"]
+    ordering = ["-created_at"]
+    queryset = User.objects.none()
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False) or not self.request.user.is_authenticated:
+            return User.objects.none()
+        firm = _get_or_create_user_firm(self.request.user)
+        if not firm.is_individual:
+            return User.objects.none()
+        return User.objects.filter(firm=firm, role=UserRole.CLERK).order_by("-created_at")
+
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return FirmCreateClerkSerializer
+        return FirmClerkSerializer
+
+    def create(self, request, *args, **kwargs):
+        firm = _get_or_create_user_firm(request.user)
+        if request.user.role != UserRole.FIRM_ADMIN or not firm.is_individual:
+            return Response(
+                {"detail": "Only INDIVIDUAL firm administrators can manage clerks at the firm level."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        clerk = serializer.save()
+        output_serializer = FirmClerkSerializer(clerk, context={"request": request})
+        headers = self.get_success_headers(output_serializer.data)
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+@extend_schema_view(
+    get=extend_schema(
+        tags=["Firm - Clerks"],
+        summary="Retrieve clerk details",
+        description="Get detailed profile information for a clerk linked to the administrator's firm.",
+        responses={200: FirmClerkSerializer, 404: OpenApiResponse(description="Clerk not found")},
+    ),
+    put=extend_schema(
+        tags=["Firm - Clerks"],
+        summary="Update clerk details",
+        description="Update clerk profile details (name, phone, address, is_active).",
+        request=FirmUpdateClerkSerializer,
+        responses={200: FirmClerkSerializer, 400: OpenApiResponse(description="Validation error")},
+    ),
+    patch=extend_schema(
+        tags=["Firm - Clerks"],
+        summary="Partially update clerk details",
+        description="Partially update clerk profile details.",
+        request=FirmUpdateClerkSerializer,
+        responses={200: FirmClerkSerializer, 400: OpenApiResponse(description="Validation error")},
+    ),
+    delete=extend_schema(
+        tags=["Firm - Clerks"],
+        summary="Soft-delete clerk",
+        description="Mark a clerk as inactive (soft delete only). Data is preserved.",
+        responses={200: OpenApiResponse(description="Clerk marked as inactive successfully")},
+    ),
+)
+class FirmClerkDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or soft-delete a clerk within the firm."""
+
+    permission_classes = [IsAuthenticated, CanManageFirmClerks]
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False) or not self.request.user.is_authenticated:
+            return User.objects.none()
+        firm = _get_or_create_user_firm(self.request.user)
+        if not firm.is_individual:
+            return User.objects.none()
+        return User.objects.filter(firm=firm, role=UserRole.CLERK)
+
+    def get_serializer_class(self):
+        if self.request.method in ["PUT", "PATCH"]:
+            return FirmUpdateClerkSerializer
+        return FirmClerkSerializer
+
+    def update(self, request, *args, **kwargs):
+        firm = _get_or_create_user_firm(request.user)
+        if request.user.role != UserRole.FIRM_ADMIN or not firm.is_individual:
+            return Response(
+                {"detail": "Only INDIVIDUAL firm administrators can manage clerks at the firm level."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        output_serializer = FirmClerkSerializer(instance, context={"request": request})
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+    def destroy(self, request, *args, **kwargs):
+        firm = _get_or_create_user_firm(request.user)
+        if request.user.role != UserRole.FIRM_ADMIN or not firm.is_individual:
+            return Response(
+                {"detail": "Only INDIVIDUAL firm administrators can manage clerks at the firm level."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        clerk = self.get_object()
+        clerk.is_active = False
+        clerk.save(update_fields=["is_active", "updated_at"])
+        _revoke_all_refresh_tokens(clerk)
+        return Response(
+            {"message": "Clerk marked as inactive successfully.", "id": clerk.id, "is_active": False},
+            status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(
+    tags=["Firm - Clerks"],
+    summary="Reactivate an inactive clerk",
+    description="Restore an inactive clerk to active status.",
+    responses={200: OpenApiResponse(description="Clerk reactivated successfully")},
+)
+class FirmClerkReactivateView(APIView):
+    """Reactivate a previously soft-deleted clerk within the firm."""
+
+    permission_classes = [IsAuthenticated, CanManageFirmClerks]
+
+    def post(self, request, pk: int):
+        firm = _get_or_create_user_firm(request.user)
+        if request.user.role != UserRole.FIRM_ADMIN or not firm.is_individual:
+            return Response(
+                {"detail": "Only INDIVIDUAL firm administrators can manage clerks at the firm level."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        try:
+            clerk = User.objects.get(pk=pk, firm=firm, role=UserRole.CLERK)
+        except User.DoesNotExist:
+            return Response({"detail": "Clerk not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        clerk.is_active = True
+        clerk.save(update_fields=["is_active", "updated_at"])
+        return Response(
+            {"message": "Clerk reactivated successfully.", "id": clerk.id, "is_active": True},
+            status=status.HTTP_200_OK,
+        )
+

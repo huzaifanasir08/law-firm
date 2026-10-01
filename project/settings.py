@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     "apps.administration",
     "apps.leads",
     "apps.subscription",
+    "apps.clerk",
 ]
 
 MIDDLEWARE = [
@@ -242,6 +243,10 @@ SPECTACULAR_SETTINGS = {
         {"name": "Plans", "description": "Subscription plans management and public tiers"},
         {"name": "Transactions", "description": "Financial and payment transaction auditing"},
         {"name": "Subscriptions", "description": "Firm subscription memberships and composite onboarding"},
+        {"name": "Clerk - Tasks", "description": "Clerk task review and status updates"},
+        {"name": "Firm - Clerks", "description": "Firm clerk onboarding and management"},
+        {"name": "Lawyer - Tasks", "description": "Lawyer task assignment and tracking"},
+        {"name": "Lawyer - Clerks", "description": "Lawyer clerk management and staff list"},
     ],
     "SWAGGER_UI_SETTINGS": {
         "persistAuthorization": True,

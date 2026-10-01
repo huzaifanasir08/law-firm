@@ -64,3 +64,23 @@ class CanManageFirmLawyers(BasePermission):
 
         return False
 
+
+class CanManageFirmClerks(BasePermission):
+    """
+    Permission class enforcing that clerk management at the firm level
+    is strictly scoped to INDIVIDUAL Firm Administrators.
+    Super Admins, Multi Firm Admins, and other roles are forbidden.
+    """
+
+    message = "Only INDIVIDUAL firm administrators can access and manage clerks at the firm level."
+
+    def has_permission(self, request, view) -> bool:
+        user = request.user
+        if not (user and user.is_authenticated):
+            return False
+        if user.role != UserRole.FIRM_ADMIN:
+            return False
+        firm = get_user_firm(user)
+        return bool(firm and firm.is_individual)
+
+

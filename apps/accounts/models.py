@@ -90,6 +90,18 @@ class User(AbstractBaseUser, PermissionsMixin):
         verbose_name=_("firm"),
     )
 
+    # ── Lawyer association (for clerks) ───────────────────────────────────────
+    lawyer = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="clerks",
+        verbose_name=_("assigned lawyer"),
+        help_text=_("The lawyer to whom this clerk is assigned (if applicable)."),
+    )
+
+
     # ── Profile photo ─────────────────────────────────────────────────────────
     profile_photo = models.ImageField(
         _("profile photo"),
