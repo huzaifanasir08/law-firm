@@ -34,6 +34,7 @@ def make_user(db):
         is_active=True,
         **kwargs,
     ):
+        firm_in_kwargs = "firm" in kwargs
         user = User.objects.create_user(
             email=email,
             password=password,
@@ -43,6 +44,29 @@ def make_user(db):
             **kwargs,
         )
         user._plain_password = password  # Store for assertions
+
+        if not firm_in_kwargs and role != UserRole.SUPER_ADMIN:
+            from datetime import timedelta
+            from django.utils import timezone
+            from apps.firm.models import Firm, FirmType
+            from apps.subscription.models import Plan, PlanCycle, Subscription, SubscriptionStatus
+
+            firm = Firm.objects.create(name=f"Firm for {email}", type=FirmType.MULTI, is_active=True)
+            plan, _ = Plan.objects.get_or_create(
+                name="Default Test Plan",
+                defaults={"price": 100.0, "cycle": PlanCycle.MONTHLY, "is_active": True},
+            )
+            Subscription.objects.create(
+                plan=plan,
+                firm=firm,
+                firm_admin=user,
+                status=SubscriptionStatus.ACTIVE,
+                started_at=timezone.now(),
+                ends_at=timezone.now() + timedelta(days=30),
+            )
+            user.firm = firm
+            user.save(update_fields=["firm"])
+
         return user
 
     return _make_user

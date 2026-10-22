@@ -101,6 +101,10 @@ class LoginSerializer(serializers.Serializer):
                 code="account_inactive",
             )
 
+        from .permissions import validate_user_subscription
+
+        validate_user_subscription(user)
+
         if user.two_factor_enabled:
             from .emails import send_otp_email
             from .models import OTPPurpose
@@ -268,37 +272,40 @@ class OTPSendSerializer(serializers.Serializer):
         user = getattr(request, "user", None)
         if user and user.is_authenticated:
             attrs["user"] = user
-            return attrs
+        else:
+            session_token = attrs.get("otp_session_token")
+            email = attrs.get("email")
 
-        session_token = attrs.get("otp_session_token")
-        email = attrs.get("email")
+            if session_token:
+                try:
+                    from .tokens import OTPSessionToken
 
-        if session_token:
-            try:
-                from .tokens import OTPSessionToken
-                token = OTPSessionToken(session_token)
-                user_id = token.get("user_id")
-                user = User.objects.get(id=user_id, is_active=True)
-                attrs["user"] = user
-                return attrs
-            except Exception:
+                    token = OTPSessionToken(session_token)
+                    user_id = token.get("user_id")
+                    user = User.objects.get(id=user_id, is_active=True)
+                    attrs["user"] = user
+                except Exception:
+                    raise serializers.ValidationError(
+                        {"otp_session_token": [_("Invalid or expired session token.")]}
+                    )
+            elif email:
+                try:
+                    user = User.objects.get(email=email.lower().strip(), is_active=True)
+                    attrs["user"] = user
+                except User.DoesNotExist:
+                    # Do not leak email existence; return generic None user
+                    attrs["user"] = None
+            else:
                 raise serializers.ValidationError(
-                    {"otp_session_token": [_("Invalid or expired session token.")]}
+                    {"non_field_errors": [_("Either otp_session_token or email is required.")]}
                 )
 
-        if email:
-            try:
-                user = User.objects.get(email=email.lower().strip(), is_active=True)
-                attrs["user"] = user
-                return attrs
-            except User.DoesNotExist:
-                # Do not leak email existence; return generic None user
-                attrs["user"] = None
-                return attrs
+        if attrs.get("user"):
+            from .permissions import validate_user_subscription
 
-        raise serializers.ValidationError(
-            {"non_field_errors": [_("Either otp_session_token or email is required.")]}
-        )
+            validate_user_subscription(attrs["user"])
+
+        return attrs
 
 
 class OTPVerifySerializer(serializers.Serializer):
@@ -323,6 +330,9 @@ class OTPVerifySerializer(serializers.Serializer):
         user = getattr(request, "user", None)
         if user and user.is_authenticated:
             attrs["user"] = user
+            from .permissions import validate_user_subscription
+
+            validate_user_subscription(user)
             return attrs
 
         session_token = attrs.get("otp_session_token")
@@ -335,25 +345,31 @@ class OTPVerifySerializer(serializers.Serializer):
                 user_id = token.get("user_id")
                 user = User.objects.get(id=user_id, is_active=True)
                 attrs["user"] = user
-                return attrs
             except Exception:
                 raise serializers.ValidationError(
                     {"otp_session_token": [_("Invalid or expired session token.")]}
                 )
 
-        if email:
+        elif email:
             try:
                 user = User.objects.get(email=email.lower().strip(), is_active=True)
                 attrs["user"] = user
-                return attrs
             except User.DoesNotExist:
                 raise serializers.ValidationError(
                     {"non_field_errors": [_("Invalid credentials or OTP.")]}
                 )
 
-        raise serializers.ValidationError(
-            {"non_field_errors": [_("Either otp_session_token or email is required.")]}
-        )
+        else:
+            raise serializers.ValidationError(
+                {"non_field_errors": [_("Either otp_session_token or email is required.")]}
+            )
+
+        if attrs.get("user"):
+            from .permissions import validate_user_subscription
+
+            validate_user_subscription(attrs["user"])
+
+        return attrs
 
 
 class TwoFARequestChangeSerializer(serializers.Serializer):

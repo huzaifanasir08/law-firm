@@ -216,3 +216,36 @@ class Subscription(models.Model):
 
     def __str__(self) -> str:
         return f"{self.firm.name} - {self.plan.name} ({self.status})"
+
+    @property
+    def is_valid(self) -> bool:
+        """
+        Check whether this subscription is currently valid (active paid or within valid trial).
+        """
+        now = timezone.now()
+
+        # Cannot be valid if started in the future
+        if self.started_at and self.started_at > now:
+            return False
+
+        # If explicitly canceled or marked with canceled_at in the past
+        if self.status == SubscriptionStatus.CANCELED:
+            return False
+        if self.canceled_at and self.canceled_at <= now:
+            return False
+
+        # If explicitly expired or pending
+        if self.status in [SubscriptionStatus.EXPIRED, SubscriptionStatus.PENDING]:
+            return False
+
+        # End date check
+        if self.ends_at and self.ends_at <= now:
+            return False
+
+        # Trial validity check
+        if self.is_trial or self.status == SubscriptionStatus.TRIAL:
+            if self.trial_ends_at and self.trial_ends_at <= now:
+                return False
+            return self.status in [SubscriptionStatus.TRIAL, SubscriptionStatus.ACTIVE]
+
+        return self.status == SubscriptionStatus.ACTIVE

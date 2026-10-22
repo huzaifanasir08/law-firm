@@ -78,6 +78,7 @@ class LoginView(APIView):
         responses={
             200: OpenApiResponse(description="Authentication successful"),
             400: OpenApiResponse(description="Invalid credentials or inactive account"),
+            403: OpenApiResponse(description="Forbidden: Firm subscription or trial missing/expired, or firm inactive"),
         },
         examples=[
             OpenApiExample(
@@ -397,6 +398,7 @@ class OTPSendView(APIView):
         request=OTPSendSerializer,
         responses={
             200: OpenApiResponse(description="OTP sent"),
+            403: OpenApiResponse(description="Forbidden: Firm subscription or trial missing/expired, or firm inactive"),
             429: OpenApiResponse(description="Rate limited / cooldown active"),
         },
     )
@@ -437,6 +439,7 @@ class OTPResendView(APIView):
         request=OTPSendSerializer,
         responses={
             200: OpenApiResponse(description="New OTP sent"),
+            403: OpenApiResponse(description="Forbidden: Firm subscription or trial missing/expired, or firm inactive"),
             429: OpenApiResponse(description="Rate limited / cooldown active"),
         },
     )
@@ -478,6 +481,7 @@ class OTPVerifyView(APIView):
         responses={
             200: OpenApiResponse(description="Authentication successful"),
             400: OpenApiResponse(description="Invalid, expired, or exceeded attempts"),
+            403: OpenApiResponse(description="Forbidden: Firm subscription or trial missing/expired, or firm inactive"),
         },
     )
     def post(self, request):
@@ -490,6 +494,10 @@ class OTPVerifyView(APIView):
         success, message, _ = verify_otp(user, OTPPurpose.LOGIN, code)
         if not success:
             return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .permissions import validate_user_subscription
+
+        validate_user_subscription(user)
 
         refresh = RefreshToken.for_user(user)
         user_data = UserProfileMiniSerializer(user, context={"request": request}).data
