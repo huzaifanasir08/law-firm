@@ -78,6 +78,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
     firm_name = serializers.CharField(source="firm.name", read_only=True)
     firm_admin_name = serializers.CharField(source="firm_admin.name", read_only=True)
     firm_admin_email = serializers.CharField(source="firm_admin.email", read_only=True)
+    is_valid = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Subscription
@@ -88,6 +89,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
             "transaction",
             "transaction_details",
             "status",
+            "is_valid",
             "is_trial",
             "trial_duration_days",
             "trial_ends_at",
@@ -103,7 +105,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "is_valid", "created_at", "updated_at"]
 
 
 class SubscriptionUpdateSerializer(serializers.ModelSerializer):

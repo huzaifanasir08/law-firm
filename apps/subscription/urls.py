@@ -8,11 +8,14 @@ from .views import (
     AdminTransactionDetailView,
     AdminTransactionListView,
     PublicPlanListView,
+    SelfSubscriptionView,
 )
 
 app_name = "subscription"
 
 urlpatterns = [
+    # Self firm subscription (authenticated user)
+    path("me/", SelfSubscriptionView.as_view(), name="subscription-me"),
     # Public plan list
     path("plans/", PublicPlanListView.as_view(), name="public-plan-list"),
     # Direct admin routes under subscription app (if accessed directly via /api/subscription/admin/...)

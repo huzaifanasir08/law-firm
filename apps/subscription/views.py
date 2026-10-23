@@ -1,8 +1,11 @@
+from django.utils.translation import gettext_lazy as _
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import filters, generics, status
+from rest_framework.exceptions import NotFound
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsSuperAdmin
 from apps.administration.pagination import StandardResultsSetPagination
@@ -244,3 +247,50 @@ class AdminSubscriptionDetailView(generics.RetrieveUpdateDestroyAPIView):
         if self.request.method in ["PUT", "PATCH"]:
             return SubscriptionUpdateSerializer
         return SubscriptionSerializer
+
+
+# ─── Self Subscription ────────────────────────────────────────────────────────
+
+@extend_schema(tags=["Subscriptions"])
+class SelfSubscriptionView(APIView):
+    """
+    Retrieve the current subscription details for the authenticated user's firm.
+    Similar to GET /api/accounts/me/, this endpoint requires no URL ID parameters.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        summary="Get current firm subscription",
+        description=(
+            "Return the active or latest subscription details for the authenticated user's firm. "
+            "If multiple subscriptions exist, returns the currently active/valid subscription."
+        ),
+        responses={
+            200: SubscriptionSerializer,
+            404: OpenApiResponse(description="No firm associated or no subscription found"),
+        },
+    )
+    def get(self, request):
+        user = request.user
+        firm = getattr(user, "firm", None)
+        if not firm:
+            raise NotFound(str(_("Your account is not associated with any firm.")))
+
+        subscriptions = firm.subscriptions.select_related(
+            "plan", "transaction", "firm", "firm_admin"
+        ).order_by("-created_at")
+
+        # Pick currently valid subscription if one exists, otherwise most recent
+        active_sub = None
+        for sub in subscriptions:
+            if sub.is_valid:
+                active_sub = sub
+                break
+
+        target_sub = active_sub or subscriptions.first()
+        if not target_sub:
+            raise NotFound(str(_("No subscription found for your firm.")))
+
+        serializer = SubscriptionSerializer(target_sub, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
